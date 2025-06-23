@@ -55,6 +55,8 @@ module emu
 	input  [11:0] HDMI_WIDTH,
 	input  [11:0] HDMI_HEIGHT,
 	output        HDMI_FREEZE,
+	output        HDMI_BLACKOUT,
+	output        HDMI_BOB_DEINT,
 
 `ifdef MISTER_FB
 	// Use framebuffer in DDRAM
@@ -185,12 +187,14 @@ assign BUTTONS   = 0;
 assign VGA_SCALER= 0;
 assign VGA_DISABLE = 0;
 assign HDMI_FREEZE = 0;
+assign HDMI_BLACKOUT = 0;
+assign HDMI_BOB_DEINT = 0;
 
 // Status Bit Map:
 // 0         1         2         3          4         5         6
 // 01234567890123456789012345678901 23456789012345678901234567890123
 // 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-// XXX X XXXXXXXXXXXXXXX XXXXXXXXX            XXX
+// XXX X XXXXXXXXXXXXXXXXXXXXXXXXX            XXX
 
 `include "build_id.v"
 localparam CONF_STR = {
@@ -225,6 +229,7 @@ localparam CONF_STR = {
 	"P2,Hardware;",
 	"P2-;",
 	"P2OJ,Mouse,Enabled,Disabled;",
+	"P2OL,AMX Mouse,Disabled,Joystick 1;",
 	"P2OM,Right Shift,Backslash,Shift;",
 	"P2ON,Keypad,Numbers,Symbols;",
 	"P2-;",
@@ -752,6 +757,16 @@ multiplay_mouse mmouse
 	.dout(mmouse_dout)
 );
 
+wire [6:0] amouse_dout;
+amx_mouse amx_mouse
+(
+	.clk_sys(clk_sys),
+	.reset(reset),
+	.ps2_mouse(ps2_mouse),
+	.sel(joy1_sel),
+	.dout(amouse_dout)
+);
+
 /////////////////////////////////////////////////////////////////////////
 
 wire [15:0] cpu_addr;
@@ -764,6 +779,7 @@ wire        cursor;
 wire  [9:0] Fn;
 wire        tape_rec;
 wire  [1:0] mode;
+wire        joy1_sel;
 
 wire  [7:0] cpu_din = ram_dout & mf2_dout & fdc_dout & kmouse_dout & smouse_dout & mmouse_dout & playcity_dout;
 wire        NMI = playcity_nmi | mf2_nmi;
@@ -781,6 +797,7 @@ Amstrad_motherboard motherboard
 	.right_shift_mod(st_right_shift_mod),
 	.keypad_mod(st_keypad_mod),
 	.ps2_key(ps2_key),
+	.joy1_sel(joy1_sel),
 	.Fn(Fn),
 
 	.no_wait(status[6] & ~tape_motor),
@@ -788,7 +805,7 @@ Amstrad_motherboard motherboard
 	.crtc_type(~status[2]),
 	.sync_filter(1),
 
-	.joy1(status[18] ? joy2 : joy1),
+	.joy1((status[21] ? amouse_dout : 7'd0) | (status[18] ? joy2 : joy1)),
 	.joy2(status[18] ? joy1 : joy2),
 
 	.tape_in(tape_play),
