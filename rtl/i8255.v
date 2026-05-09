@@ -34,7 +34,13 @@ module i8255
 	input     [7:0] ipb, 
 	output    [7:0] opb,
 	input     [7:0] ipc, 
-	output    [7:0] opc
+	output    [7:0] opc,
+
+	input           sna_load,
+	input     [7:0] sna_opa,
+	input     [7:0] sna_opb,
+	input     [7:0] sna_opc,
+	input     [7:0] sna_control
 );
 
 reg [7:0] mode;
@@ -79,6 +85,7 @@ always @(posedge clk_sys) begin
 
 	old_we <= we;
 	if (reset) {opa_r,opb_r,opc_r,mode} <= {8'h00,8'h00,8'h00,8'h9B};
+	else if (sna_load) {opa_r,opb_r,opc_r,mode} <= {sna_opa,sna_opb,sna_opc,sna_control};
 	else begin
 		if(~old_we & we & cs) begin
 			case(addr)

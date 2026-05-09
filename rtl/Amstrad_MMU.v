@@ -35,6 +35,9 @@ module Amstrad_MMU
 
 	input  [7:0] D,
 	input [15:0] A,
+	input        sna_load,
+	input  [7:0] sna_ram_config,
+	input  [7:0] sna_rom_select,
 	output reg [22:0] ram_A
 );
 
@@ -49,6 +52,11 @@ always @(posedge CLK) begin
 		ROMbank    <=0;
 		RAMmap     <=0;
 		RAMpage    <=3;
+	end
+	else if (sna_load) begin
+		RAMmap  <= sna_ram_config[2:0];
+		RAMpage <= {1'b0, 1'b0, sna_ram_config[5:3]} + 5'd3;
+		ROMbank <= rom_map[sna_rom_select] ? sna_rom_select : 8'h00;
 	end
 	else begin
 		old_wr <= io_WR;

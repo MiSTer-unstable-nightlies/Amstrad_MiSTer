@@ -70,7 +70,12 @@ module ga40010 (
 	output GREEN_OE_N, // GREEN  50%
 	output GREEN,      // GREN  100%
 	output RED_OE_N,   // RED    50%
-	output RED         // RED   100%
+	output RED,        // RED   100%
+
+	input        SNA_LOAD,
+	input  [4:0] SNA_INKSEL,
+	input [135:0] SNA_PALETTE,
+	input  [7:0] SNA_CONFIG
 );
 
 wire reset = ~RESET_N;
@@ -185,11 +190,20 @@ wire       inkr_en   = reg_sel & ~D[7] &  D[6] & ~inksel[4];
 assign     irq_reset = ctrl_en & D[4];
 
 always @(posedge clk) begin
-	if (ink_en) inksel <= D[4:0];
-	if (reset) border <= 5'b10000; else if (border_en) border <= D[4:0];
-	if (reset) {hromen, lromen, mode1, mode0} <= 0;
-	else if (ctrl_en) {hromen, lromen, mode1, mode0} <= D[3:0];
-	if (inkr_en) inkr[inksel[3:0]] <= D[4:0];
+	if (SNA_LOAD) begin
+		integer i;
+		inksel <= SNA_INKSEL;
+		for (i = 0; i < 16; i = i + 1) inkr[i] <= SNA_PALETTE[(i*8) +: 5];
+		border <= SNA_PALETTE[128 +: 5];
+		{hromen, lromen, mode1, mode0} <= SNA_CONFIG[3:0];
+	end
+	else begin
+		if (ink_en) inksel <= D[4:0];
+		if (reset) border <= 5'b10000; else if (border_en) border <= D[4:0];
+		if (reset) {hromen, lromen, mode1, mode0} <= 0;
+		else if (ctrl_en) {hromen, lromen, mode1, mode0} <= D[3:0];
+		if (inkr_en) inkr[inksel[3:0]] <= D[4:0];
+	end
 end
 
 assign MODE = {mode1, mode0};

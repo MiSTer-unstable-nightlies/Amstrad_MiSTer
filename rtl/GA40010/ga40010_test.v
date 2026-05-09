@@ -111,7 +111,12 @@ ga40010 ga40010 (
 	.GREEN(GREEN),
 	.RED_OE_N(RED_OE_N),
 	.RED(RED),
-	.VBLANK()
+	.VBLANK(),
+
+	.SNA_LOAD(1'b0),
+	.SNA_INKSEL(5'd0),
+	.SNA_PALETTE(136'd0),
+	.SNA_CONFIG(8'd0)
 );
 
 /// CRTC INSTANCE ///
@@ -139,6 +144,10 @@ UM6845R CRTC
 	.RS(A[8]),
 	.DI(CPU_DIN),
 	.DO(crtc_dout),
+
+	.SNA_LOAD(1'b0),
+	.SNA_ADDR(5'd0),
+	.SNA_REGS(144'd0),
 
 	.VSYNC(CRTC_VSYNC),
 	.HSYNC(CRTC_HSYNC),

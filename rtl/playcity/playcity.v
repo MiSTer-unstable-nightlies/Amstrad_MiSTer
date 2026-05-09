@@ -95,7 +95,11 @@ YM2149 psg_left
 
 	.CHANNEL_A(chl_a),
 	.CHANNEL_B(chl_b),
-	.CHANNEL_C(chl_c)
+	.CHANNEL_C(chl_c),
+
+	.SNA_LOAD(1'b0),
+	.SNA_ADDR(4'd0),
+	.SNA_REGS(128'd0)
 );
 
 wire [9:0] ar = {2'b00, chr_a} + {2'b00, chr_b} + {2'b00, chr_c};
@@ -117,7 +121,11 @@ YM2149 psg_right
 
 	.CHANNEL_A(chr_a),
 	.CHANNEL_B(chr_b),
-	.CHANNEL_C(chr_c)
+	.CHANNEL_C(chr_c),
+
+	.SNA_LOAD(1'b0),
+	.SNA_ADDR(4'd0),
+	.SNA_REGS(128'd0)
 );
 
 endmodule

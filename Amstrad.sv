@@ -207,7 +207,11 @@ localparam CONF_STR = {
 	"-;",
 	"F4,CDT,Load tape;",
 	"F5,ROM,Load Dandanator ROM;",
+	"F6,SNA,Load snapshot;",
+	"F7,E??,Load CPC464 ROM;",
 	"OK,Tape sound,Disabled,Enabled;",
+	"-;",
+	"O[62:61],SNAC,Off,Player 1,Player 2;",
 	"-;",
 	"OI,Joysticks swap,No,Yes;",
 	"-;",
@@ -239,7 +243,7 @@ localparam CONF_STR = {
 	"P2OGH,FDC,Original,Fast,Disabled;",
 	"P2-;",
 	"P2oAC,Distributor,Amstrad,Orion,Schneider,Awa,Solavox,Saisho,Triumph,Isp;",
-	"P2O4,Model,CPC 6128,CPC 664;",
+	"P2O[5:4],Model,CPC 6128,CPC 664,CPC 464;",
 	"P2OV,Tape progressbar,Off,On;",
 
 	"-;",
@@ -296,18 +300,39 @@ wire  [7:0] ioctl_dout;
 wire        ioctl_download;
 wire  [7:0] ioctl_index;
 wire [31:0] ioctl_file_ext;
-wire        ioctl_wait = romdl_wait;
+wire        ioctl_wait;
 
 wire [10:0] ps2_key;
 wire [24:0] ps2_mouse;
 
 wire  [1:0] buttons;
-wire  [6:0] joy1;
-wire  [6:0] joy2;
+wire  [6:0] joy1_usb;
+wire  [6:0] joy2_usb;
 wire [63:0] status;
 
 wire        forced_scandoubler;
 wire [21:0] gamma_bus;
+
+wire  [1:0] snac_player = status[62:61];
+wire [15:0] joydb_1;
+wire [15:0] joydb_2;
+wire        joydb_1ena;
+wire        joydb_2ena;
+
+joydb joydb
+(
+	.USER_IN(USER_IN),
+	.snac_player(snac_player),
+	.joystick1(joydb_1),
+	.joystick2(joydb_2),
+	.joystick1_en(joydb_1ena),
+	.joystick2_en(joydb_2ena)
+);
+
+wire [6:0] joy1_db9 = OSD_STATUS ? 7'd0 : {joydb_1[10], joydb_1[6], joydb_1[4], joydb_1[3:0]};
+wire [6:0] joy2_db9 = OSD_STATUS ? 7'd0 : {joydb_2[10], joydb_2[6], joydb_2[4], joydb_2[3:0]};
+wire [6:0] joy1     = joydb_1ena ? joy1_db9 : joy1_usb;
+wire [6:0] joy2     = joydb_2ena ? joy2_db9 : joydb_1ena ? joy1_usb : joy2_usb;
 
 hps_io #(.CONF_STR(CONF_STR), .VDNUM(2)) hps_io
 (
@@ -329,8 +354,8 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(2)) hps_io
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
 
-	.joystick_0(joy1),
-	.joystick_1(joy2),
+	.joystick_0(joy1_usb),
+	.joystick_1(joy2_usb),
 
 	.buttons(buttons),
 	.status(status),
@@ -350,9 +375,59 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(2)) hps_io
 	.ioctl_wait(ioctl_wait)
 );
 
-wire        rom_download = ioctl_download && (ioctl_index[4:0] < 4);
+wire        rom_download = ioctl_download && ((ioctl_index[4:0] < 4) || (ioctl_index == 7));
 wire        tape_download = ioctl_download && (ioctl_index == 4);
-wire        dan_download = ioctl_download && (ioctl_index == 5);																			 
+wire        dan_download = ioctl_download && (ioctl_index == 5);
+wire        sna_download = ioctl_download && (ioctl_index == 6);
+wire [24:0] sna_mem_addr = ioctl_addr - 25'h100;
+wire [15:0] sna_std_mem_size = (sna_mem_size > 16'd128) ? 16'd128 : sna_mem_size;
+wire [24:0] sna_chunk_start = 25'h100 + {sna_std_mem_size[14:0], 10'd0};
+
+reg [211:0] sna_cpu_dir = 212'd0;
+reg   [4:0] sna_crtc_addr = 5'd0;
+reg [143:0] sna_crtc_regs = 144'd0;
+reg   [4:0] sna_ga_inksel = 5'd0;
+reg [135:0] sna_ga_palette = 136'd0;
+reg   [7:0] sna_ga_config = 8'd0;
+reg   [7:0] sna_ram_config = 8'd0;
+reg   [7:0] sna_rom_select = 8'd0;
+reg   [7:0] sna_ppi_a = 8'd0;
+reg   [7:0] sna_ppi_b = 8'd0;
+reg   [7:0] sna_ppi_c = 8'd0;
+reg   [7:0] sna_ppi_control = 8'h9b;
+reg   [3:0] sna_psg_addr = 4'd0;
+reg [127:0] sna_psg_regs = 128'd0;
+reg  [15:0] sna_mem_size = 16'd64;
+reg   [1:0] sna_model = 2'd0;
+reg   [2:0] sna_apply_cnt = 3'd0;
+reg         sna_finish_pending = 1'b0;
+reg         old_sna_download_reset = 1'b0;
+wire        sna_load = (sna_apply_cnt == 3'd1);
+wire        sna_mem_wr = sna_download && ioctl_wr && (ioctl_addr >= 25'h100) &&
+                         (ioctl_addr < sna_chunk_start) && ({9'd0, sna_mem_addr[16:10]} < sna_std_mem_size);
+reg  [31:0] sna_chunk_name = 32'd0;
+reg  [31:0] sna_chunk_len = 32'd0;
+reg  [31:0] sna_chunk_rem = 32'd0;
+reg   [2:0] sna_chunk_hdr = 3'd0;
+reg         sna_chunk_data = 1'b0;
+reg         sna_chunk_mem = 1'b0;
+reg         sna_chunk_rle = 1'b0;
+reg         sna_chunk_finish = 1'b0;
+reg   [3:0] sna_chunk_bank = 4'd0;
+reg  [15:0] sna_chunk_out = 16'd0;
+reg   [1:0] sna_rle_state = 2'd0;
+reg   [7:0] sna_rle_count = 8'd0;
+reg   [7:0] sna_rle_value = 8'd0;
+
+assign ioctl_wait = romdl_wait | (sna_download && |sna_rle_count && (sna_rle_state == 2'd0));
+
+function automatic [1:0] valid_model(input [1:0] requested);
+	begin
+		valid_model = (requested == 2'd3) ? 2'd0 : requested;
+	end
+endfunction
+
+wire [1:0] menu_model = valid_model(status[5:4]);
 
 // A 8MB bank is split to 2 halves
 // Fist 4 MB is OS ROM + RAM pages + MF2 ROM
@@ -371,22 +446,47 @@ always @(posedge clk_sys) begin
 	reg       combo = 0;
 	reg       old_download;
 	reg 	  old_dan_download;
+	reg       old_sna_download;
 	reg  	  old_st0 = 0;
 
-	if((rom_download | dan_download)  & ioctl_wr) begin
+	if(!romdl_wait && sna_rle_count && (sna_rle_state == 2'd0) && sna_chunk_mem && (sna_chunk_bank < 4'd2)) begin
+		romdl_wait <= 1;
+		boot_dout <= sna_rle_value;
+		boot_bank <= sna_model;
+		boot_a[22:14] <= 9'd8 + {5'd0, sna_chunk_bank[1:0], sna_chunk_out[15:14]};
+		boot_a[13:0] <= sna_chunk_out[13:0];
+		sna_chunk_out <= sna_chunk_out + 1'd1;
+		sna_rle_count <= sna_rle_count - 1'd1;
+		if((sna_rle_count == 8'd1) && sna_chunk_finish) begin
+			sna_chunk_data <= 1'b0;
+			sna_chunk_hdr <= 3'd0;
+			sna_chunk_name <= 32'd0;
+			sna_chunk_len <= 32'd0;
+			sna_chunk_mem <= 1'b0;
+			sna_chunk_rle <= 1'b0;
+			sna_chunk_finish <= 1'b0;
+			sna_rle_state <= 2'd0;
+		end
+	end
+	else if((rom_download | dan_download | sna_mem_wr)  & ioctl_wr) begin
 		romdl_wait <= 1;
 		boot_dout <= ioctl_dout;
 
 		boot_a[13:0] <= ioctl_addr[13:0];
 
-		if (dan_download) begin
+		if (sna_mem_wr) begin
+			boot_bank <= sna_model;
+			boot_a[22:14] <= 9'd8 + {6'd0, sna_mem_addr[16:14]};
+			boot_a[13:0] <= sna_mem_addr[13:0];
+		end
+		else if (dan_download) begin
 			boot_bank <= 2'b11;
 			boot_a[22:14] <= ioctl_addr[22:14];
 		end 
 		else if(ioctl_index) begin
 			boot_a[22]    <= page[8];
 			boot_a[21:14] <= page[7:0] + ioctl_addr[21:14];
-			boot_bank     <= {1'b0, &ioctl_index[7:6]};
+			boot_bank     <= (ioctl_index == 7) ? 2'd2 : {1'b0, &ioctl_index[7:6]};
 		end
 		else begin
 			case(ioctl_addr[24:14])
@@ -394,12 +494,15 @@ always @(posedge clk_sys) begin
 					1,5: boot_a[22:14] <= 9'h100; //BASIC
 					2,6: boot_a[22:14] <= 9'h107; //AMSDOS
 					3,7: boot_a[22:14] <= 9'h0ff; //MF2
+					8:   boot_a[22:14] <= 9'h000; //CPC464 OS
+					9:   boot_a[22:14] <= 9'h100; //CPC464 BASIC
 			  default:    romdl_wait <= 0;
 			endcase
 
 			case(ioctl_addr[24:14])
 			  0,1,2,3: boot_bank <= 0; //CPC6128
 			  4,5,6,7: boot_bank <= 1; //CPC664
+			  8,9:     boot_bank <= 2; //CPC464
 			endcase
 		end
 	end
@@ -409,7 +512,7 @@ always @(posedge clk_sys) begin
 		if(boot_wr & romdl_wait) begin
 			boot_wr <= 0;
 			// load expansion ROM into both banks if manually loaded or boot name is boot.eXX
-			if((ioctl_index[7:6]==1 || ioctl_index[5:0]) && !boot_bank) boot_bank <= 1;
+			if(rom_download && (ioctl_index[7:6]==1 || ioctl_index[5:0]) && !boot_bank) boot_bank <= 1;
 			else begin
 				{boot_wr, romdl_wait} <= 0;
 				if(boot_a[22]) rom_map[boot_a[21:14]] <= 1;
@@ -438,6 +541,206 @@ always @(posedge clk_sys) begin
     if (old_dan_download & ~dan_download)  begin
         dan_eeprom_loaded <= 1'b1;
     end
+	if(sna_download && ioctl_wr && (ioctl_addr < 25'h100)) begin
+		case(ioctl_addr[7:0])
+			8'h11: sna_cpu_dir[15:8]    <= ioctl_dout;          // F
+			8'h12: sna_cpu_dir[7:0]     <= ioctl_dout;          // A
+			8'h13: sna_cpu_dir[87:80]   <= ioctl_dout;          // C
+			8'h14: sna_cpu_dir[95:88]   <= ioctl_dout;          // B
+			8'h15: sna_cpu_dir[103:96]  <= ioctl_dout;          // E
+			8'h16: sna_cpu_dir[111:104] <= ioctl_dout;          // D
+			8'h17: sna_cpu_dir[119:112] <= ioctl_dout;          // L
+			8'h18: sna_cpu_dir[127:120] <= ioctl_dout;          // H
+			8'h19: sna_cpu_dir[47:40]   <= ioctl_dout;          // R
+			8'h1a: sna_cpu_dir[39:32]   <= ioctl_dout;          // I
+			8'h1b: sna_cpu_dir[210]     <= ioctl_dout[0];       // IFF1
+			8'h1c: sna_cpu_dir[211]     <= ioctl_dout[0];       // IFF2
+			8'h1d: sna_cpu_dir[135:128] <= ioctl_dout;          // IX low
+			8'h1e: sna_cpu_dir[143:136] <= ioctl_dout;          // IX high
+			8'h1f: sna_cpu_dir[199:192] <= ioctl_dout;          // IY low
+			8'h20: sna_cpu_dir[207:200] <= ioctl_dout;          // IY high
+			8'h21: sna_cpu_dir[55:48]   <= ioctl_dout;          // SP low
+			8'h22: sna_cpu_dir[63:56]   <= ioctl_dout;          // SP high
+			8'h23: sna_cpu_dir[71:64]   <= ioctl_dout;          // PC low
+			8'h24: sna_cpu_dir[79:72]   <= ioctl_dout;          // PC high
+			8'h25: sna_cpu_dir[209:208] <= ioctl_dout[1:0];     // IM
+			8'h26: sna_cpu_dir[31:24]   <= ioctl_dout;          // F'
+			8'h27: sna_cpu_dir[23:16]   <= ioctl_dout;          // A'
+			8'h28: sna_cpu_dir[151:144] <= ioctl_dout;          // C'
+			8'h29: sna_cpu_dir[159:152] <= ioctl_dout;          // B'
+			8'h2a: sna_cpu_dir[167:160] <= ioctl_dout;          // E'
+			8'h2b: sna_cpu_dir[175:168] <= ioctl_dout;          // D'
+			8'h2c: sna_cpu_dir[183:176] <= ioctl_dout;          // L'
+			8'h2d: sna_cpu_dir[191:184] <= ioctl_dout;          // H'
+			8'h2e: sna_ga_inksel        <= ioctl_dout[4:0];
+			8'h40: sna_ga_config        <= ioctl_dout;
+			8'h41: sna_ram_config       <= ioctl_dout;
+			8'h42: sna_crtc_addr        <= ioctl_dout[4:0];
+			8'h55: sna_rom_select       <= ioctl_dout;
+			8'h56: sna_ppi_a            <= ioctl_dout;
+			8'h57: sna_ppi_b            <= ioctl_dout;
+			8'h58: sna_ppi_c            <= ioctl_dout;
+			8'h59: sna_ppi_control      <= ioctl_dout;
+			8'h5a: sna_psg_addr         <= ioctl_dout[3:0];
+			8'h6b: sna_mem_size[7:0]    <= ioctl_dout;
+			8'h6c: begin
+				sna_mem_size[15:8] <= ioctl_dout;
+				if({ioctl_dout, sna_mem_size[7:0]} > 16'd64) sna_model <= 2'd0;
+				else if(sna_cpu_dir[79:64] == 16'h0038) sna_model <= 2'd2;
+			end
+			8'h6d: begin
+				if(sna_mem_size > 16'd64) sna_model <= 2'd0;
+				else begin
+					case(ioctl_dout)
+						8'd0: sna_model <= 2'd2; // CPC464
+						8'd1: sna_model <= 2'd1; // CPC664
+						8'd2, 8'd4, 8'd6: sna_model <= 2'd0; // 6128/Plus/GX snapshots need the 128K map.
+					endcase
+				end
+			end
+		endcase
+
+		if(ioctl_addr[7:0] >= 8'h2f && ioctl_addr[7:0] <= 8'h3f)
+			sna_ga_palette[((ioctl_addr[7:0] - 8'h2f) * 8) +: 8] <= ioctl_dout;
+		if(ioctl_addr[7:0] >= 8'h43 && ioctl_addr[7:0] <= 8'h54)
+			sna_crtc_regs[((ioctl_addr[7:0] - 8'h43) * 8) +: 8] <= ioctl_dout;
+		if(ioctl_addr[7:0] >= 8'h5b && ioctl_addr[7:0] <= 8'h6a)
+			sna_psg_regs[((ioctl_addr[7:0] - 8'h5b) * 8) +: 8] <= ioctl_dout;
+	end
+	if(~old_download & ioctl_download & sna_download) begin
+		sna_cpu_dir <= 212'd0;
+		sna_crtc_regs <= 144'd0;
+		sna_ga_palette <= 136'd0;
+		sna_psg_regs <= 128'd0;
+		sna_mem_size <= 16'd64;
+		sna_model <= menu_model;
+		sna_ppi_control <= 8'h9b;
+		sna_chunk_name <= 32'd0;
+		sna_chunk_len <= 32'd0;
+		sna_chunk_rem <= 32'd0;
+		sna_chunk_hdr <= 3'd0;
+		sna_chunk_data <= 1'b0;
+		sna_chunk_mem <= 1'b0;
+		sna_chunk_rle <= 1'b0;
+		sna_chunk_finish <= 1'b0;
+		sna_chunk_bank <= 4'd0;
+		sna_chunk_out <= 16'd0;
+		sna_rle_state <= 2'd0;
+		sna_rle_count <= 8'd0;
+		sna_rle_value <= 8'd0;
+		sna_finish_pending <= 1'b0;
+	end
+	if(sna_download && ioctl_wr && !romdl_wait && (!sna_rle_count || (sna_rle_state == 2'd2)) && (ioctl_addr >= sna_chunk_start)) begin
+		if(!sna_chunk_data) begin
+			case(sna_chunk_hdr)
+				3'd0: sna_chunk_name[31:24] <= ioctl_dout;
+				3'd1: sna_chunk_name[23:16] <= ioctl_dout;
+				3'd2: sna_chunk_name[15:8]  <= ioctl_dout;
+				3'd3: sna_chunk_name[7:0]   <= ioctl_dout;
+				3'd4: sna_chunk_len[7:0]    <= ioctl_dout;
+				3'd5: sna_chunk_len[15:8]   <= ioctl_dout;
+				3'd6: sna_chunk_len[23:16]  <= ioctl_dout;
+				3'd7: begin
+					reg [31:0] next_name;
+					reg [31:0] next_len;
+					next_name = sna_chunk_name;
+					next_len = {ioctl_dout, sna_chunk_len[23:0]};
+					sna_chunk_len[31:24] <= ioctl_dout;
+					sna_chunk_rem <= {ioctl_dout, sna_chunk_len[23:0]};
+					sna_chunk_data <= |next_len;
+					sna_chunk_mem <= (next_name[31:24] == "M") && (next_name[23:16] == "E") &&
+					                 (next_name[15:8] == "M") && (next_name[7:0] >= "0") &&
+					                 (next_name[7:0] <= "1");
+					sna_chunk_rle <= (next_len != 32'd65536);
+					sna_chunk_finish <= 1'b0;
+					sna_chunk_bank <= next_name[3:0];
+					if((next_name[31:24] == "M") && (next_name[23:16] == "E") &&
+					   (next_name[15:8] == "M") && (next_name[7:0] == "1")) sna_model <= 2'd0;
+					sna_chunk_out <= 16'd0;
+					sna_rle_state <= 2'd0;
+					sna_rle_count <= 8'd0;
+				end
+			endcase
+			sna_chunk_hdr <= sna_chunk_hdr + 1'd1;
+		end
+		else begin
+			reg [31:0] next_rem;
+			next_rem = sna_chunk_rem - 1'd1;
+			sna_chunk_rem <= next_rem;
+			if(sna_chunk_mem && (sna_chunk_bank < 4'd2)) begin
+				if(!sna_chunk_rle) begin
+					romdl_wait <= 1;
+					boot_dout <= ioctl_dout;
+					boot_bank <= sna_model;
+					boot_a[22:14] <= 9'd8 + {5'd0, sna_chunk_bank[1:0], sna_chunk_out[15:14]};
+					boot_a[13:0] <= sna_chunk_out[13:0];
+					sna_chunk_out <= sna_chunk_out + 1'd1;
+				end
+				else begin
+					case(sna_rle_state)
+						2'd0: begin
+							if(ioctl_dout == 8'he5) sna_rle_state <= 2'd1;
+							else begin
+								romdl_wait <= 1;
+								boot_dout <= ioctl_dout;
+								boot_bank <= sna_model;
+								boot_a[22:14] <= 9'd8 + {5'd0, sna_chunk_bank[1:0], sna_chunk_out[15:14]};
+								boot_a[13:0] <= sna_chunk_out[13:0];
+								sna_chunk_out <= sna_chunk_out + 1'd1;
+							end
+						end
+						2'd1: begin
+							if(ioctl_dout == 8'd0) begin
+								romdl_wait <= 1;
+								boot_dout <= 8'he5;
+								boot_bank <= sna_model;
+								boot_a[22:14] <= 9'd8 + {5'd0, sna_chunk_bank[1:0], sna_chunk_out[15:14]};
+								boot_a[13:0] <= sna_chunk_out[13:0];
+								sna_chunk_out <= sna_chunk_out + 1'd1;
+								sna_rle_state <= 2'd0;
+							end
+							else begin
+								sna_rle_count <= ioctl_dout;
+								sna_rle_state <= 2'd2;
+							end
+						end
+						2'd2: begin
+							sna_rle_value <= ioctl_dout;
+							romdl_wait <= 1;
+							boot_dout <= ioctl_dout;
+							boot_bank <= sna_model;
+							boot_a[22:14] <= 9'd8 + {5'd0, sna_chunk_bank[1:0], sna_chunk_out[15:14]};
+							boot_a[13:0] <= sna_chunk_out[13:0];
+							sna_chunk_out <= sna_chunk_out + 1'd1;
+							sna_rle_count <= sna_rle_count - 1'd1;
+							sna_rle_state <= 2'd0;
+						end
+					endcase
+				end
+			end
+			if(next_rem == 32'd0 && sna_chunk_rle && sna_chunk_mem && (sna_chunk_bank < 4'd2) &&
+			   (sna_rle_state == 2'd2) && (sna_rle_count > 8'd1)) begin
+				sna_chunk_finish <= 1'b1;
+			end
+			else if(next_rem == 32'd0) begin
+				sna_chunk_data <= 1'b0;
+				sna_chunk_hdr <= 3'd0;
+				sna_chunk_name <= 32'd0;
+				sna_chunk_len <= 32'd0;
+				sna_chunk_mem <= 1'b0;
+				sna_chunk_rle <= 1'b0;
+				sna_chunk_finish <= 1'b0;
+				sna_rle_state <= 2'd0;
+			end
+		end
+	end
+	old_sna_download <= sna_download;
+	if(old_sna_download & ~sna_download) sna_finish_pending <= 1'b1;
+	if(sna_finish_pending && !romdl_wait && !boot_wr && !sna_rle_count) begin
+		sna_finish_pending <= 1'b0;
+		sna_apply_cnt <= 3'd5;
+	end
+	else if(sna_apply_cnt) sna_apply_cnt <= sna_apply_cnt - 1'd1;
 	old_st0 <= status[32];
 	if (~old_st0 & status[32]) dan_eeprom_loaded <= 0;
 end
@@ -464,10 +767,10 @@ sdram sdram
 	.oe  (reset ? 1'b0      : mem_rd & ~mf2_ram_en),
 	.we  (reset ? boot_wr   : mem_wr & ~mf2_ram_en & ~mf2_rom_en),
 	.addr(reset ? boot_a    : mf2_rom_en ? {9'h0ff, cpu_addr[13:0]} : dan_ena ? {4'd0, dan_bank, cpu_addr[13:0]} : ram_a),
-	.bank(reset ? boot_bank : dan_ena ? 2'b11 : {1'b0, model}),
+	.bank(reset ? boot_bank : dan_ena ? 2'b11 : model),
 	.din (reset ? boot_dout : cpu_dout),
 	.dout(ram_dout),
-	.vram_bank({1'b0, model}),
+	.vram_bank(model),
 	.vram_addr({2'b10,vram_addr,1'b0}),
 	.vram_dout(vram_dout),
 
@@ -480,12 +783,15 @@ sdram sdram
 	.tape_rd_ack(tape_data_ack)
 );
 
-reg model = 0;
+reg [1:0] model = 2'd0;
 reg reset;
 
 always @(posedge clk_sys) begin
-	if(reset) model <= status[4];
-	reset <= RESET | status[0] | status[32] | buttons[1] | rom_download | key_reset | dan_download;
+	if(sna_load) model <= sna_model;
+	else if(reset) model <= menu_model;
+	old_sna_download_reset <= sna_download;
+	reset <= RESET | status[0] | status[32] | buttons[1] | rom_download | key_reset | dan_download |
+	         sna_download | sna_finish_pending | (old_sna_download_reset & ~sna_download) | (sna_apply_cnt > 3'd2);
 end
 
 ////////////////////// CDT playback ///////////////////////////////
@@ -824,6 +1130,22 @@ Amstrad_motherboard motherboard
 	.crtc_type(~status[2]),
 	.sync_filter(1),
 
+	.sna_load(sna_load),
+	.sna_cpu_dir(sna_cpu_dir),
+	.sna_crtc_addr(sna_crtc_addr),
+	.sna_crtc_regs(sna_crtc_regs),
+	.sna_ga_inksel(sna_ga_inksel),
+	.sna_ga_palette(sna_ga_palette),
+	.sna_ga_config(sna_ga_config),
+	.sna_ram_config(sna_ram_config),
+	.sna_rom_select(sna_rom_select),
+	.sna_ppi_a(sna_ppi_a),
+	.sna_ppi_b(sna_ppi_b),
+	.sna_ppi_c(sna_ppi_c),
+	.sna_ppi_control(sna_ppi_control),
+	.sna_psg_addr(sna_psg_addr),
+	.sna_psg_regs(sna_psg_regs),
+
 	.joy1((status[21] ? amouse_dout : 7'd0) | (status[18] ? joy2 : joy1)),
 	.joy2(status[18] ? joy1 : joy2),
 
@@ -849,7 +1171,7 @@ Amstrad_motherboard motherboard
 	.vram_addr(vram_addr),
 
 	.rom_map(rom_map),
-	.ram64k(model),
+	.ram64k(model != 2'd0),
 	.mem_rd(mem_rd),
 	.mem_wr(mem_wr),
 	.mem_addr(ram_a),

@@ -31,6 +31,10 @@ module UM6845R
 	input            RS,
 	input      [7:0] DI,
 	output reg [7:0] DO,
+
+	input            SNA_LOAD,
+	input      [4:0] SNA_ADDR,
+	input    [143:0] SNA_REGS,
 	
 	output reg       VSYNC,
 	output reg       HSYNC,
@@ -94,7 +98,26 @@ always @(*) begin
 end
 
 always @(posedge CLOCK) begin
-	if (ENABLE & ~nCS & ~R_nW) begin
+	if (SNA_LOAD) begin
+		addr <= SNA_ADDR;
+		R0_h_total       <= SNA_REGS[  0 +: 8];
+		R1_h_displayed   <= SNA_REGS[  8 +: 8];
+		R2_h_sync_pos    <= SNA_REGS[ 16 +: 8];
+		{R3_v_sync_width,R3_h_sync_width} <= SNA_REGS[24 +: 8];
+		R4_v_total       <= SNA_REGS[ 32 +: 7];
+		R5_v_total_adj   <= SNA_REGS[ 40 +: 5];
+		R6_v_displayed   <= SNA_REGS[ 48 +: 7];
+		R7_v_sync_pos    <= SNA_REGS[ 56 +: 7];
+		{R8_skew, R8_interlace} <= {SNA_REGS[69:68], SNA_REGS[65:64]};
+		R9_v_max_line    <= SNA_REGS[ 72 +: 5];
+		{R10_cursor_mode,R10_cursor_start} <= SNA_REGS[86:80] & 7'h7f;
+		R11_cursor_end   <= SNA_REGS[ 88 +: 5];
+		R12_start_addr_h <= SNA_REGS[ 96 +: 6];
+		R13_start_addr_l <= SNA_REGS[104 +: 8];
+		R14_cursor_h     <= SNA_REGS[112 +: 6];
+		R15_cursor_l     <= SNA_REGS[120 +: 8];
+	end
+	else if (ENABLE & ~nCS & ~R_nW) begin
 		if (~RS) addr <= DI[4:0];
 		else begin
 			case (addr)

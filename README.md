@@ -33,7 +33,7 @@ important Basic commands:
 ## Boot ROM
 Boot ROM has following structure:
 
-OS6128 + BASIC1.1 + AMSDOS + MF2 + OS664 + BASIC664 + AMSDOS + MF2
+OS6128 + BASIC1.1 + AMSDOS + MF2 + OS664 + BASIC664 + AMSDOS + MF2 + OS464 + BASIC464
 
 Every part is 16KB. You can create your own ROM if you have a special preference.
 
@@ -53,6 +53,7 @@ You can define boot extensions to automatically load at start of core. Use follo
 * boot.eXX  - load to both 664 and 6128 configs
 * boot0.eXX - load to 6128 config
 * boot1.eXX - load to 664 config
+* CPC464 ROM can be loaded from the core menu with **Load CPC464 ROM**. Use an eZ0 file containing LowROM(OS) + Page 0(BASIC), such as cpc464nd.eZ0.
 
 whehe XX is 00-FF, ZZ, Z0.
 
@@ -72,7 +73,7 @@ For loading a tape you need to type these commands
 RUN" + Enter for loading a .CDT file after selected it from OSD menù 
 
 ## RAM
-CPC664 model has only 64KB RAM - use this model for programs not compatible with 128KB RAM.
+CPC664 and CPC464 models have only 64KB RAM - use these models for programs not compatible with 128KB RAM.
 
 CPC6128 model has 64KB+512KB RAM. Upper 448KB are visible in special OS ROM or application aware of 512KB expansion.
 

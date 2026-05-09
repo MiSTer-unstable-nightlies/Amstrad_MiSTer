@@ -61,7 +61,11 @@ module YM2149
 	output [7:0] IOA_out,
 
 	input  [7:0] IOB_in,
-	output [7:0] IOB_out
+	output [7:0] IOB_out,
+
+	input        SNA_LOAD,
+	input  [3:0] SNA_ADDR,
+	input [127:0] SNA_REGS
 );
 
 assign ACTIVE  = ~ymreg[7][5:0];
@@ -79,6 +83,11 @@ always @(posedge CLK) begin
 		ymreg[7]  <= '1;
 		addr      <= '0;
 		env_reset <= 0;
+	end else if(SNA_LOAD) begin
+		integer i;
+		for (i = 0; i < 16; i = i + 1) ymreg[i] <= SNA_REGS[(i*8) +: 8];
+		addr <= {4'h0, SNA_ADDR};
+		env_reset <= 1;
 	end else begin
 		env_reset <= 0;
 		if(BDIR) begin
